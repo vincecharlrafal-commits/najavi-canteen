@@ -17,17 +17,17 @@ const transaction = {
   id: "txn-1",
   completedAt: "2026-10-11T02:00:00.000Z",
   businessDate: "2026-10-11",
-  subtotal: 75,
-  discount: 15,
+  subtotal: 60,
+  discount: 0,
   totalDue: 60,
   cashPaid: 70,
   change: 10,
-  freeDrinks: 1,
+  freeDrinks: 0,
   itemCount: 3,
   items: [
     { id: 1, name: "Kanin", unitPrice: 15, quantity: 1, lineTotal: 15 },
     { id: 2, name: "Ulam", unitPrice: 35, quantity: 1, lineTotal: 35 },
-    { id: 4, name: "Ice Cream", unitPrice: 25, quantity: 1, lineTotal: 25 },
+    { id: 4, name: "Ice Cream", unitPrice: 10, quantity: 1, lineTotal: 10 },
   ],
 };
 

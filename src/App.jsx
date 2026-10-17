@@ -12,8 +12,8 @@ import iceCreamImage from "./assets/ice_cream.png";
 const products = [
   { id: 1, name: "Kanin", price: 15, category: "Meals", description: "Steamed Rice", image: kaninImage },
   { id: 2, name: "Ulam", price: 35, category: "Meals", description: "Canteen Viand", image: ulamImage },
-  { id: 3, name: "Softdrinks", price: 20, category: "Drinks", description: "Chilled Drink", image: softdrinksImage },
-  { id: 4, name: "Ice Cream", price: 25, category: "Desserts", description: "Cold Dessert", image: iceCreamImage },
+  { id: 3, name: "Softdrinks", price: 15, category: "Drinks", description: "Chilled Drink", image: softdrinksImage },
+  { id: 4, name: "Ice Cream", price: 10, category: "Desserts", description: "Cold Dessert", image: iceCreamImage },
 ];
 
 function Icon({ name, size = 20 }) {
