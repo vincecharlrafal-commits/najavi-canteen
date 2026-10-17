@@ -39,7 +39,7 @@ Copy `.env.example` to `.env` before starting Vite if you want to set frontend v
 
 ## Production deployment (Vercel + Render)
 
-The frontend reads `VITE_API_BASE_URL` at build time. In the Vercel project, add `VITE_API_BASE_URL` with value `https://najavi-canteen.onrender.com/api` to the **Production** environment (the existing Preview setting does not configure Production), save it, and redeploy the production deployment from `python-backend-upgrade`. Keep the Preview variable for Preview deployments. The app appends `/menu`, `/quote`, and `/checkout` to this base, so do not add another `/api` segment.
+The frontend reads `VITE_API_BASE_URL` at build time. Set `VITE_API_BASE_URL` to `https://najavi-canteen.onrender.com/api` in the Vercel **Production** environment; keep any Preview configuration scoped to Preview. Production currently tracks `main`, so merge the reviewed pull request into `main` before expecting its corresponding Vercel Production deployment. Do not promote a Preview deployment to Production unless you have verified that its source is the intended commit on `main`. The app appends `/menu`, `/quote`, and `/checkout` to this base, so do not add another `/api` segment.
 
 For the Render web service, use `backend` as the Root Directory, install with `pip install -r requirements.txt`, and start with `gunicorn --bind 0.0.0.0:$PORT app:app`. Set `FRONTEND_ORIGINS` to the exact public Vercel production origin, for example `https://your-production-domain.vercel.app` (scheme and host only, no path or trailing slash). Add any custom production domain and any Preview origin that needs API access as comma-separated origins. Render supplies `PORT`; do not set a fixed port. The service must deploy the same `python-backend-upgrade` branch containing the current Flask catalog.
 
@@ -70,11 +70,7 @@ The API listens at `http://127.0.0.1:5000`. Its endpoints are `GET /api/health`,
 
 The API looks up prices by item ID and ignores any browser-supplied prices or totals. It keeps no transaction history. The frontend rejects a menu response whose item IDs, names, or prices do not match the approved catalog, so an older backend deployment shows an actionable error instead of stale prices.
 
-Run the console canteen program:
-
-```sh
-python backend/console_app.py
-```
+The separate academic console program is [NUCanteenBillingSystem.py](NUCanteenBillingSystem.py) at the repository root; it is independent of this Flask API.
 
 Run the Python logic and API tests (in addition to the frontend tests above):
 
