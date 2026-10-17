@@ -8,6 +8,7 @@ import {
   changeCartQuantity,
   clearCart,
   getCartItemCount,
+  getProductQuantity,
   getDailyStats,
   getOrderTotals,
   getPaymentResult,
@@ -41,6 +42,12 @@ test("cart adds duplicates as quantities, decrements to removal, and rejects inv
   assert.deepEqual(changeCartQuantity(cart, kanin.id, -1), []);
   const secondProductCart = addProductToCart(cart, ulam);
   assert.equal(getCartItemCount(secondProductCart), 2);
+  assert.equal(getProductQuantity(secondProductCart, kanin.id), 1);
+  assert.equal(getProductQuantity(secondProductCart, ulam.id), 1);
+  assert.equal(getProductQuantity(secondProductCart, softdrinks.id), 0);
+  const steppedUpCart = changeCartQuantity(secondProductCart, kanin.id, 1);
+  assert.equal(getProductQuantity(steppedUpCart, kanin.id), 2);
+  assert.equal(getProductQuantity(changeCartQuantity(steppedUpCart, kanin.id, -1), kanin.id), 1);
   assert.deepEqual(removeProductFromCart(secondProductCart, kanin.id).map((item) => item.id), [ulam.id]);
   assert.deepEqual(clearCart(), []);
 });

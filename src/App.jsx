@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import "./App.css";
-import { addProductToCart, changeCartQuantity, clearCart, getCartItemCount, getDailyStats, localDateKey, removeProductFromCart } from "./domain/order.js";
+import { addProductToCart, changeCartQuantity, clearCart, getCartItemCount, getDailyStats, getProductQuantity, localDateKey, removeProductFromCart } from "./domain/order.js";
+import { formatTransactionDateTime, getAverageOrderValue, getRecentTransactions } from "./domain/summary.js";
 import { hasReceiptData, loadTransactions } from "./services/transactionStore.js";
 import { fetchMenu, requestQuote } from "./services/canteenApi.js";
 import { completeCheckout } from "./services/checkout.js";
@@ -169,6 +170,8 @@ function App() {
   const validPaymentInput = isWholePesoAmount(cashPayment);
   const isCheckoutEnabled = cart.length > 0 && Boolean(currentQuote) && validPaymentInput && !checkoutPending && !transactionsState.error;
   const todayStats = getDailyStats(transactionsState.transactions, todayKey);
+  const averageOrderValue = getAverageOrderValue(transactionsState.transactions);
+  const recentTransactions = getRecentTransactions(transactionsState.transactions);
 
   const handleCheckout = async () => {
     if (checkoutLock.current || transactionSubmitted.current || checkoutPending) return;
@@ -304,7 +307,19 @@ function App() {
                   <p className="product-description">{product.description}</p>
                   <strong className="product-price">₱{product.price}</strong>
                 </div>
-                <button className="add-button" type="button" onClick={() => addToCart(product)} disabled={checkoutPending}><span aria-hidden="true">＋</span> Add to Cart</button>
+                <div className="product-action">
+                  {getProductQuantity(cart, product.id) === 0 ? (
+                    <button className="add-button" type="button" onClick={() => addToCart(product)} disabled={checkoutPending}>
+                      <span aria-hidden="true">+</span> Add to Cart
+                    </button>
+                  ) : (
+                    <div className="product-card-stepper" role="group" aria-label={`${product.name} quantity`}>
+                      <button type="button" aria-label={`Remove one ${product.name}`} onClick={() => updateQuantity(product.id, -1)} disabled={checkoutPending}>-</button>
+                      <span aria-live="polite" aria-atomic="true">{getProductQuantity(cart, product.id)}</span>
+                      <button type="button" aria-label={`Add one ${product.name}`} onClick={() => updateQuantity(product.id, 1)} disabled={checkoutPending}>+</button>
+                    </div>
+                  )}
+                </div>
               </article>
             ))}
             {visibleProducts.length === 0 && !menuLoading && !menuError && <p className="no-products">No menu items match your search.</p>}
@@ -320,20 +335,21 @@ function App() {
               <article className="statistic-card"><span>Today's Sales</span><strong>₱{todayStats.sales.toFixed(2)}</strong></article>
               <article className="statistic-card"><span>Customers Served</span><strong>{todayStats.customers}</strong></article>
               <article className="statistic-card"><span>Free Drinks</span><strong>{todayStats.freeDrinks}</strong></article>
+              <article className="statistic-card"><span>Average Order Value</span><strong>₱{averageOrderValue.toFixed(2)}</strong></article>
             </div>
             <section className="transaction-history">
-              <h2>Completed transactions</h2>
-              {todayStats.transactions.length === 0 ? <p className="no-transactions">No completed transactions today.</p> : (
+              <h2>Recent transactions</h2>
+              {recentTransactions.length === 0 ? <p className="no-transactions">No completed transactions yet.</p> : (
                 <div className="transaction-list">
-                  {[...todayStats.transactions].reverse().map((transaction) => {
+                  {recentTransactions.map((transaction) => {
                     const receiptAvailable = hasReceiptData(transaction);
-                    const transactionItems = transaction.itemCount ?? transaction.items?.reduce((count, item) => count + item.quantity, 0) ?? 0;
+                    const transactionItems = transaction.itemCount ?? transaction.items?.reduce((count, item) => count + item.quantity, 0) ?? null;
                     return (
                       <article className="transaction-card" key={transaction.id}>
                         <div className="transaction-details">
-                          <strong>{new Date(transaction.completedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</strong>
-                          {transaction.transactionNumber && <span className="transaction-number">{transaction.transactionNumber}</span>}
-                          <span>{transactionItems} {transactionItems === 1 ? "item" : "items"}</span>
+                          <strong className="transaction-number">{transaction.transactionNumber || transaction.id || "Transaction"}</strong>
+                          <time dateTime={transaction.completedAt}>{formatTransactionDateTime(transaction)}</time>
+                          <span>{transactionItems === null ? "Item count unavailable" : `${transactionItems} ${transactionItems === 1 ? "item" : "items"}`}</span>
                         </div>
                         <div className="transaction-actions">
                           <strong>₱{Number(transaction.totalDue).toFixed(2)}</strong>
@@ -372,6 +388,7 @@ function App() {
             const quoteLine = currentQuote?.items.find((line) => line.id === item.id);
             return (
               <div className="order-item" key={item.id}>
+                <img className="order-item-image" src={item.image} alt="" />
                 <div className="order-item-main">
                   <h3>{item.name}</h3>
                   <p>₱{quoteLine?.unitPrice ?? item.price} each</p>
@@ -398,7 +415,7 @@ function App() {
           <div className="order-totals">
             <div className="summary-row"><span>Subtotal</span><strong>{currentQuote ? `₱${subtotal.toFixed(2)}` : "—"}</strong></div>
             <div className="summary-row deduction-row"><span>Free-drink deduction</span><strong>{currentQuote ? `−₱${discount.toFixed(2)}` : "—"}</strong></div>
-            <div className="total-row"><span>TOTAL DUE</span><strong>{currentQuote ? `₱${totalDue.toFixed(2)}` : "—"}</strong></div>
+            <div className="total-row"><span>Total Due</span><strong>{currentQuote ? `₱${totalDue.toFixed(2)}` : "—"}</strong></div>
           </div>
 
           <section className="payment-card">
@@ -450,7 +467,7 @@ function App() {
               <div><span>Subtotal</span><strong>₱{activeReceipt.subtotal.toFixed(2)}</strong></div>
               <div><span>Free-drink deduction</span><strong>−₱{activeReceipt.discount.toFixed(2)}</strong></div>
               {(activeReceipt.freeDrinks ?? (activeReceipt.discount >= 15 ? 1 : 0)) > 0 && <p className="receipt-free-drink">Free drink awarded: {activeReceipt.freeDrinks ?? 1}</p>}
-              <div className="receipt-total"><span>TOTAL DUE</span><strong>₱{activeReceipt.totalDue.toFixed(2)}</strong></div>
+              <div className="receipt-total"><span>Total Due</span><strong>₱{activeReceipt.totalDue.toFixed(2)}</strong></div>
               <div><span>Cash received</span><strong>₱{activeReceipt.cashPaid.toFixed(2)}</strong></div>
               <div><span>Change</span><strong>₱{activeReceipt.change.toFixed(2)}</strong></div>
             </div>
