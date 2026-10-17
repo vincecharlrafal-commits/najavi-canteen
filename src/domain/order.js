@@ -43,6 +43,10 @@ export function getCartItemCount(cart) {
   return cart.reduce((total, item) => total + item.quantity, 0);
 }
 
+export function getProductQuantity(cart, productId) {
+  return cart.find((item) => item.id === productId)?.quantity ?? 0;
+}
+
 export function getPaymentResult(cashPayment, totalDue) {
   const trimmedCash = String(cashPayment).trim();
   if (!trimmedCash) return { valid: false, reason: "empty", change: null, amountNeeded: null };
