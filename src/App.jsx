@@ -1,20 +1,34 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import "./App.css";
-import { addProductToCart, buildTransactionRecord, changeCartQuantity, clearCart, createTransactionMetadata, getCartItemCount, getDailyStats, getOrderTotals, getPaymentResult, localDateKey, removeProductFromCart } from "./domain/order.js";
-import { appendTransaction, hasReceiptData, loadTransactions } from "./services/transactionStore.js";
+import { addProductToCart, changeCartQuantity, clearCart, getCartItemCount, getDailyStats, localDateKey, removeProductFromCart } from "./domain/order.js";
+import { hasReceiptData, loadTransactions } from "./services/transactionStore.js";
+import { fetchMenu, requestQuote } from "./services/canteenApi.js";
+import { completeCheckout } from "./services/checkout.js";
 
 import kaninImage from "./assets/kanin.png";
 import ulamImage from "./assets/ulam.png";
 import softdrinksImage from "./assets/softdrinks.png";
 import iceCreamImage from "./assets/ice_cream.png";
 
-const products = [
-  { id: 1, name: "Kanin", price: 15, category: "Meals", description: "Steamed Rice", image: kaninImage },
-  { id: 2, name: "Ulam", price: 35, category: "Meals", description: "Canteen Viand", image: ulamImage },
-  { id: 3, name: "Softdrinks", price: 15, category: "Drinks", description: "Chilled Drink", image: softdrinksImage },
-  { id: 4, name: "Ice Cream", price: 10, category: "Desserts", description: "Cold Dessert", image: iceCreamImage },
-];
+const productPresentation = {
+  1: { category: "Meals", image: kaninImage },
+  2: { category: "Meals", image: ulamImage },
+  3: { category: "Drinks", image: softdrinksImage },
+  4: { category: "Desserts", image: iceCreamImage },
+};
+
+function isWholePesoAmount(value) {
+  return /^\d+$/.test(value.trim()) && Number.isSafeInteger(Number(value));
+}
+
+function formatMenuItems(items) {
+  return items.map((item) => ({
+    ...item,
+    description: item.english_name,
+    ...productPresentation[item.id],
+  }));
+}
 
 function Icon({ name, size = 20 }) {
   const shared = { width: size, height: size, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.8, strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": true };
@@ -30,8 +44,15 @@ function Icon({ name, size = 20 }) {
 
 function App() {
   const [transactionsState, setTransactionsState] = useState(loadTransactions);
+  const [products, setProducts] = useState([]);
+  const [menuLoading, setMenuLoading] = useState(true);
+  const [menuError, setMenuError] = useState(null);
+  const [menuReload, setMenuReload] = useState(0);
   const [cart, setCart] = useState([]);
+  const [quoteState, setQuoteState] = useState({ signature: "", status: "idle", data: null, error: null });
+  const [quoteReload, setQuoteReload] = useState(0);
   const [cashPayment, setCashPayment] = useState("");
+  const [checkoutPending, setCheckoutPending] = useState(false);
   const [paymentStatus, setPaymentStatus] = useState(null);
   const [activeReceipt, setActiveReceipt] = useState(null);
   const [activeCategory, setActiveCategory] = useState("All");
@@ -41,6 +62,10 @@ function App() {
   const [currentDate, setCurrentDate] = useState(() => new Date());
   const checkoutLock = useRef(false);
   const transactionSubmitted = useRef(false);
+  const cartSignature = JSON.stringify(cart.map(({ id, quantity }) => ({ id, quantity })));
+  const currentQuote = quoteState.signature === cartSignature && quoteState.status === "ready" ? quoteState.data : null;
+  const quoteError = quoteState.signature === cartSignature && quoteState.status === "error" ? quoteState.error : null;
+  const quoteLoading = cart.length > 0 && !currentQuote && !quoteError;
   const today = currentDate.toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric", year: "numeric" });
   const todayKey = localDateKey(currentDate);
 
@@ -61,6 +86,37 @@ function App() {
   }, []);
 
   useEffect(() => {
+    const controller = new AbortController();
+    fetchMenu({ signal: controller.signal })
+      .then((items) => {
+        if (controller.signal.aborted) return;
+        setProducts(formatMenuItems(items));
+        setMenuLoading(false);
+      })
+      .catch((error) => {
+        if (controller.signal.aborted) return;
+        setMenuError(error instanceof Error ? error.message : "The menu could not be loaded.");
+        setMenuLoading(false);
+      });
+    return () => controller.abort();
+  }, [menuReload]);
+
+  useEffect(() => {
+    if (cartSignature === "[]") return undefined;
+
+    const controller = new AbortController();
+    const items = JSON.parse(cartSignature);
+    requestQuote(items, { signal: controller.signal })
+      .then((data) => {
+        if (!controller.signal.aborted) setQuoteState({ signature: cartSignature, status: "ready", data, error: null });
+      })
+      .catch((error) => {
+        if (!controller.signal.aborted) setQuoteState({ signature: cartSignature, status: "error", data: null, error: error instanceof Error ? error.message : "The order quote could not be loaded." });
+      });
+    return () => controller.abort();
+  }, [cartSignature, quoteReload]);
+
+  useEffect(() => {
     if (!mobileCartOpen) return undefined;
 
     const closeOnEscape = (event) => {
@@ -71,73 +127,116 @@ function App() {
   }, [mobileCartOpen]);
 
   const addToCart = (product) => {
+    if (checkoutPending) return;
     transactionSubmitted.current = false;
+    setQuoteState((previous) => ({ ...previous, status: "idle", data: null, error: null }));
     setCart((currentCart) => addProductToCart(currentCart, product));
     setPaymentStatus(null);
   };
 
   const updateQuantity = (productId, change) => {
+    if (checkoutPending) return;
     transactionSubmitted.current = false;
+    setQuoteState((previous) => ({ ...previous, status: "idle", data: null, error: null }));
     setCart((currentCart) => changeCartQuantity(currentCart, productId, change));
     setPaymentStatus(null);
   };
 
   const removeFromCart = (productId) => {
+    if (checkoutPending) return;
     transactionSubmitted.current = false;
+    setQuoteState((previous) => ({ ...previous, status: "idle", data: null, error: null }));
     setCart((currentCart) => removeProductFromCart(currentCart, productId));
     setPaymentStatus(null);
   };
 
   const clearOrder = () => {
+    if (checkoutPending) return;
     transactionSubmitted.current = false;
+    setQuoteState((previous) => ({ ...previous, status: "idle", data: null, error: null }));
     setCart(clearCart());
     setCashPayment("");
     setPaymentStatus(null);
   };
 
-  const { subtotal, discount, totalDue, freeDrinks, amountToPromotion, promotionProgress } = getOrderTotals(cart);
   const itemCount = getCartItemCount(cart);
-  const paymentResult = getPaymentResult(cashPayment, totalDue);
-  const isCheckoutEnabled = cart.length > 0 && paymentResult.valid && !transactionsState.error;
+  const subtotal = currentQuote?.subtotal;
+  const discount = currentQuote?.discount;
+  const totalDue = currentQuote?.totalDue;
+  const freeDrinks = currentQuote?.freeDrinks ?? 0;
+  const amountToPromotion = currentQuote ? Math.max(75 - subtotal, 0) : null;
+  const promotionProgress = currentQuote ? Math.min((subtotal / 75) * 100, 100) : 0;
+  const validPaymentInput = isWholePesoAmount(cashPayment);
+  const isCheckoutEnabled = cart.length > 0 && Boolean(currentQuote) && validPaymentInput && !checkoutPending && !transactionsState.error;
   const todayStats = getDailyStats(transactionsState.transactions, todayKey);
 
-  const handleCheckout = () => {
-    if (checkoutLock.current || transactionSubmitted.current) return;
+  const handleCheckout = async () => {
+    if (checkoutLock.current || transactionSubmitted.current || checkoutPending) return;
     if (cart.length === 0) {
       setPaymentStatus({ type: "error", message: "Add items to your order before checkout." });
-    } else if (!paymentResult.valid) {
-      setPaymentStatus({ type: "error", message: "Please enter a valid cash payment amount." });
-    } else if (transactionsState.error) {
+      return;
+    }
+    if (!currentQuote || quoteLoading || quoteError) {
+      setPaymentStatus({ type: "error", message: quoteError || "Wait for a current server quote before checkout." });
+      return;
+    }
+    if (!validPaymentInput) {
+      setPaymentStatus({ type: "error", message: "Enter payment as a non-negative whole number of pesos." });
+      return;
+    }
+    if (transactionsState.error) {
       setPaymentStatus({ type: "error", message: "Transaction history is unavailable. Checkout is disabled to protect existing records." });
-    } else {
-      checkoutLock.current = true;
-      try {
-        const { id: transactionId, completedAt } = createTransactionMetadata();
-        const transaction = buildTransactionRecord(cart, cashPayment, completedAt, transactionId);
-        const savedTransactions = appendTransaction(transaction);
-        const savedReceipt = savedTransactions[savedTransactions.length - 1];
+      return;
+    }
+
+    checkoutLock.current = true;
+    setCheckoutPending(true);
+    setPaymentStatus(null);
+    try {
+      const checkoutItems = cart.map(({ id, quantity }) => ({ id, quantity }));
+      const result = await completeCheckout(checkoutItems, Number(cashPayment));
+      transactionSubmitted.current = true;
+      setTransactionsState({ transactions: result.transactions, error: null });
+      setCurrentDate(new Date(result.transaction.completedAt));
+      setCart([]);
+      setCashPayment("");
+      setMobileCartOpen(false);
+      setPaymentStatus({ type: "success", message: `Order completed by the canteen server. Change: ₱${result.receipt.change.toFixed(2)}.` });
+      setActiveReceipt(result.receipt);
+    } catch (error) {
+      if (error?.backendReceipt) {
         transactionSubmitted.current = true;
-        setTransactionsState({ transactions: savedTransactions, error: null });
-        setCurrentDate(completedAt);
         setCart([]);
         setCashPayment("");
         setMobileCartOpen(false);
-        setPaymentStatus({ type: "success", message: `Order completed. Change: ₱${paymentResult.change.toFixed(2)}.` });
-        setActiveReceipt(savedReceipt);
-      } catch (error) {
-        setPaymentStatus({ type: "error", message: error instanceof Error ? error.message : "The transaction could not be saved." });
-      } finally {
-        checkoutLock.current = false;
+        setActiveReceipt(error.backendReceipt);
+        setPaymentStatus({ type: "error", message: `${error.message} Keep this receipt; the completed order is not in this browser's Summary.` });
+      } else {
+        setPaymentStatus({ type: "error", message: error instanceof Error ? error.message : "Checkout could not be completed." });
       }
+    } finally {
+      checkoutLock.current = false;
+      setCheckoutPending(false);
     }
   };
-
   const visibleProducts = products.filter((product) => {
     const matchesCategory = activeCategory === "All" || product.category === activeCategory;
     const query = searchQuery.trim().toLowerCase();
     const matchesSearch = !query || `${product.name} ${product.description} ${product.category}`.toLowerCase().includes(query);
     return matchesCategory && matchesSearch;
   });
+
+  const retryMenu = () => {
+    setProducts([]);
+    setMenuError(null);
+    setMenuLoading(true);
+    setMenuReload((value) => value + 1);
+  };
+
+  const retryQuote = () => {
+    setQuoteState((previous) => ({ ...previous, status: "idle", data: null, error: null }));
+    setQuoteReload((value) => value + 1);
+  };
 
   return (
     <div className="app">
@@ -184,6 +283,9 @@ function App() {
           </label>
         </div>
 
+        {menuLoading && <p className="payment-hint" role="status">Loading menu from the canteen server…</p>}
+        {menuError && <div className="payment-message payment-error" role="alert"><span>{menuError}</span> <button type="button" onClick={retryMenu}>Retry menu</button></div>}
+
         <div className="category-filters" aria-label="Filter menu by category">
           {["All", "Meals", "Drinks", "Desserts"].map((category) => (
             <button key={category} type="button" className={`category-button${activeCategory === category ? " selected" : ""}`} onClick={() => setActiveCategory(category)}>{category}</button>
@@ -202,10 +304,10 @@ function App() {
                   <p className="product-description">{product.description}</p>
                   <strong className="product-price">₱{product.price}</strong>
                 </div>
-                <button className="add-button" type="button" onClick={() => addToCart(product)}><span aria-hidden="true">＋</span> Add to Cart</button>
+                <button className="add-button" type="button" onClick={() => addToCart(product)} disabled={checkoutPending}><span aria-hidden="true">＋</span> Add to Cart</button>
               </article>
             ))}
-            {visibleProducts.length === 0 && <p className="no-products">No menu items match your search.</p>}
+            {visibleProducts.length === 0 && !menuLoading && !menuError && <p className="no-products">No menu items match your search.</p>}
           </div>
         </section>
         </> : (
@@ -251,7 +353,7 @@ function App() {
       <button className="mobile-cart-bar" type="button" aria-controls="my-order-panel" aria-expanded={mobileCartOpen} onClick={() => setMobileCartOpen(true)}>
         <span className="mobile-cart-label"><Icon name="cart" size={20} />My Order</span>
         <span className="mobile-cart-count">{itemCount} {itemCount === 1 ? "item" : "items"}</span>
-        {itemCount > 0 && <strong className="mobile-cart-total">₱{totalDue.toFixed(2)}</strong>}
+        {itemCount > 0 && <strong className="mobile-cart-total">{currentQuote ? `₱${currentQuote.totalDue.toFixed(2)}` : "…"}</strong>}
       </button>
       {mobileCartOpen && <button className="mobile-cart-backdrop" type="button" aria-label="Close My Order" onClick={() => setMobileCartOpen(false)} />}
 
@@ -259,54 +361,57 @@ function App() {
         <div className="order-header">
           <h2>My Order</h2>
           <span className="item-count-badge">{itemCount} {itemCount === 1 ? "item" : "items"}</span>
-          <button className="clear-order" type="button" onClick={clearOrder} disabled={cart.length === 0}>× <span>Clear Order</span></button>
+          <button className="clear-order" type="button" onClick={clearOrder} disabled={cart.length === 0 || checkoutPending}>× <span>Clear Order</span></button>
           <button className="mobile-cart-close" type="button" aria-label="Close My Order" onClick={() => setMobileCartOpen(false)}>×</button>
         </div>
 
         <div className={`order-items${cart.length === 0 ? " empty" : ""}`}>
           {cart.length === 0 ? (
             <div className="empty-order"><div className="empty-cart-icon"><Icon name="cart" size={42} /></div><p>Your order is empty. Add items from the menu.</p></div>
-          ) : cart.map((item) => (
-            <div className="order-item" key={item.id}>
-              <div className="order-item-main">
-                <h3>{item.name}</h3>
-                <p>₱{item.price} each</p>
-                <div className="quantity-controls" aria-label={`${item.name} quantity`}>
-                  <button className="quantity-button" type="button" aria-label={`Decrease ${item.name} quantity`} onClick={() => updateQuantity(item.id, -1)}>−</button>
-                  <span className="quantity-value">{item.quantity}</span>
-                  <button className="quantity-button" type="button" aria-label={`Increase ${item.name} quantity`} onClick={() => updateQuantity(item.id, 1)}>+</button>
-                  <button className="remove-button" type="button" onClick={() => removeFromCart(item.id)}>Remove</button>
+          ) : cart.map((item) => {
+            const quoteLine = currentQuote?.items.find((line) => line.id === item.id);
+            return (
+              <div className="order-item" key={item.id}>
+                <div className="order-item-main">
+                  <h3>{item.name}</h3>
+                  <p>₱{quoteLine?.unitPrice ?? item.price} each</p>
+                  <div className="quantity-controls" aria-label={`${item.name} quantity`}>
+                    <button className="quantity-button" type="button" aria-label={`Decrease ${item.name} quantity`} onClick={() => updateQuantity(item.id, -1)} disabled={checkoutPending}>−</button>
+                    <span className="quantity-value">{item.quantity}</span>
+                    <button className="quantity-button" type="button" aria-label={`Increase ${item.name} quantity`} onClick={() => updateQuantity(item.id, 1)} disabled={checkoutPending}>+</button>
+                    <button className="remove-button" type="button" onClick={() => removeFromCart(item.id)} disabled={checkoutPending}>Remove</button>
+                  </div>
                 </div>
+                <strong className="line-total">{quoteLine ? `₱${quoteLine.lineTotal.toFixed(2)}` : quoteError ? "—" : "Updating…"}</strong>
               </div>
-              <strong className="line-total">₱{(item.price * item.quantity).toFixed(2)}</strong>
-            </div>
-          ))}
+            );
+          })}
         </div>
 
         <div className="order-bottom">
           <section className={`promotion-card${freeDrinks > 0 ? " promotion-qualified" : ""}`} aria-label="Free-drink promotion">
-            <div className="promotion-heading"><Icon name="gift" size={22} /><strong>{freeDrinks > 0 ? "Free Drink Unlocked!" : "Free Drink Reward"}</strong><span>{freeDrinks > 0 ? "Qualified!" : `₱${amountToPromotion} to go`}</span></div>
+            <div className="promotion-heading"><Icon name="gift" size={22} /><strong>{freeDrinks > 0 ? "Free Drink Unlocked!" : "Free Drink Reward"}</strong><span>{freeDrinks > 0 ? "Qualified!" : amountToPromotion === null ? "Quote pending" : `₱${amountToPromotion} to go`}</span></div>
             <div className="progress-track"><div className="progress-fill" style={{ width: `${promotionProgress}%` }} /></div>
-            <p>{freeDrinks > 0 ? "₱15 deduction applied" : `Add ₱${amountToPromotion} more to unlock your free drink.`}</p>
+            <p>{freeDrinks > 0 ? "₱15 deduction applied" : amountToPromotion === null ? "Waiting for the canteen server quote." : `Add ₱${amountToPromotion} more to unlock your free drink.`}</p>
           </section>
 
           <div className="order-totals">
-            <div className="summary-row"><span>Subtotal</span><strong>₱{subtotal.toFixed(2)}</strong></div>
-            <div className="summary-row deduction-row"><span>Free-drink deduction</span><strong>−₱{discount.toFixed(2)}</strong></div>
-            <div className="total-row"><span>TOTAL DUE</span><strong>₱{totalDue.toFixed(2)}</strong></div>
+            <div className="summary-row"><span>Subtotal</span><strong>{currentQuote ? `₱${subtotal.toFixed(2)}` : "—"}</strong></div>
+            <div className="summary-row deduction-row"><span>Free-drink deduction</span><strong>{currentQuote ? `−₱${discount.toFixed(2)}` : "—"}</strong></div>
+            <div className="total-row"><span>TOTAL DUE</span><strong>{currentQuote ? `₱${totalDue.toFixed(2)}` : "—"}</strong></div>
           </div>
 
           <section className="payment-card">
             <label className="cash-label" htmlFor="cash-payment"><span><Icon name="cash" size={17} />Cash Payment</span>
-              <input id="cash-payment" type="number" inputMode="decimal" min="0" step="0.01" placeholder="Enter amount" value={cashPayment} onChange={(event) => { const value = event.target.value; setCashPayment(value.startsWith("-") ? "" : value); setPaymentStatus(null); }} />
+              <input id="cash-payment" type="number" inputMode="numeric" min="0" step="1" placeholder="Enter whole pesos" value={cashPayment} disabled={checkoutPending} onChange={(event) => { const value = event.target.value; setCashPayment(value.startsWith("-") ? "" : value); setPaymentStatus(null); }} />
             </label>
-            {cart.length > 0 && !cashPayment.trim() && <p className="payment-hint">Enter a cash amount to enable checkout.</p>}
-            {paymentResult.reason === "invalid" && <p className="payment-message payment-error" role="status">Enter a valid non-negative cash amount.</p>}
-            {paymentResult.reason === "insufficient" && <p className="payment-message payment-error" role="status">Insufficient payment. Amount still needed: ₱{paymentResult.amountNeeded.toFixed(2)}.</p>}
-            {paymentResult.valid && <div className="change-row"><span>Change</span><strong>₱{paymentResult.change.toFixed(2)}</strong></div>}
+            {cart.length > 0 && !cashPayment.trim() && <p className="payment-hint">Enter whole pesos to enable server checkout.</p>}
+            {cashPayment.trim() && !validPaymentInput && <p className="payment-message payment-error" role="status">Enter payment as a non-negative whole number of pesos.</p>}
+            {quoteLoading && <p className="payment-hint" role="status">Updating order totals from the canteen server…</p>}
+            {quoteError && <p className="payment-message payment-error" role="alert">{quoteError} <button type="button" onClick={retryQuote}>Retry quote</button></p>}
             {paymentStatus && <p className={`payment-message payment-${paymentStatus.type}`} role="status">{paymentStatus.message}</p>}
             {transactionsState.error && <p className="payment-message payment-error" role="alert">Transaction storage is unavailable. Existing records are protected; checkout is disabled.</p>}
-            <button className="checkout-button" type="button" onClick={handleCheckout} disabled={!isCheckoutEnabled}>▣&nbsp; Checkout</button>
+            <button className="checkout-button" type="button" onClick={handleCheckout} disabled={!isCheckoutEnabled}>{checkoutPending ? "Checking out…" : "▣  Checkout"}</button>
           </section>
         </div>
       </aside>
