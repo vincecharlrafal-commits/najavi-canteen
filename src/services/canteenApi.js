@@ -8,7 +8,7 @@ async function requestJson(path, options = {}) {
       headers: options.body ? { "Content-Type": "application/json", ...options.headers } : options.headers,
     });
   } catch {
-    throw new Error("Canteen server is unavailable. Start Flask and try again.");
+    throw new Error("Canteen server could not be reached. Check the connection and try again.");
   }
 
   let payload;
@@ -26,7 +26,18 @@ async function requestJson(path, options = {}) {
 
 export async function fetchMenu(options = {}) {
   const payload = await requestJson("/menu", options);
-  if (!Array.isArray(payload.items)) throw new Error("Canteen server returned an invalid menu.");
+  const expectedMenu = [
+    [1, "Kanin", 15],
+    [2, "Ulam", 35],
+    [3, "Softdrinks", 15],
+    [4, "Ice Cream", 10],
+  ];
+  const validMenu = Array.isArray(payload.items) && payload.items.length === expectedMenu.length &&
+    expectedMenu.every(([id, name, price], index) => {
+      const item = payload.items[index];
+      return item && item.id === id && item.name === name && item.price === price;
+    });
+  if (!validMenu) throw new Error("Canteen server returned an outdated or invalid menu. Contact the canteen administrator.");
   return payload.items;
 }
 
