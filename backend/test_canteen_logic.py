@@ -1,4 +1,3 @@
-"""Run with: python -m unittest discover -s backend -p 'test_*.py'"""
 
 import unittest
 

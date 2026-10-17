@@ -52,6 +52,17 @@ test("cart adds duplicates as quantities, decrements to removal, and rejects inv
   assert.deepEqual(clearCart(), []);
 });
 
+test("quantity updates preserve cart order and the identity of unaffected items", () => {
+  const cart = [kanin, ulam, softdrinks].map((item) => ({ ...item, quantity: 1 }));
+  const updated = changeCartQuantity(cart, ulam.id, 1);
+
+  assert.deepEqual(updated.map(({ id }) => id), [kanin.id, ulam.id, softdrinks.id]);
+  assert.equal(updated[0], cart[0]);
+  assert.equal(updated[2], cart[2]);
+  assert.notEqual(updated[1], cart[1]);
+  assert.equal(updated[1].quantity, 2);
+});
+
 test("subtotal and promotion totals cover ₱65, ₱75, ₱80, and dropping below threshold", () => {
   const at65 = [product(1, "Kanin", 15), product(2, "Ulam", 35), product(3, "Softdrinks", 15)];
   const at75 = [product(2, "Ulam", 35), { ...product(4, "Ice Cream", 10), quantity: 4 }];

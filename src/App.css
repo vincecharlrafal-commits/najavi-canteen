@@ -986,24 +986,27 @@ button {
 }
 
 .order-item {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
+  display: grid;
+  grid-template-columns: 52px minmax(0, 1fr) 76px;
+  align-items: start;
+  gap: 10px;
   padding: 15px 2px;
   border-bottom: 1px solid var(--border-soft);
 }
 
 .order-item-image {
-  width: 58px;
-  height: 58px;
-  flex: 0 0 auto;
-  border-radius: 12px;
+  width: 52px;
+  height: 52px;
+  grid-column: 1;
+  grid-row: 1;
+  border-radius: 10px;
   background: var(--mint);
   object-fit: contain;
 }
 
 .order-item-main {
+  grid-column: 2;
+  grid-row: 1;
   min-width: 0;
 }
 
@@ -1022,11 +1025,17 @@ button {
 }
 
 .line-total {
+  grid-column: 3;
+  grid-row: 1;
+  min-width: 76px;
+  min-height: 20px;
+  justify-self: end;
   padding-top: 2px;
   color: var(--green-deep);
   font-size: 14px;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
+  text-align: right;
   white-space: nowrap;
 }
 
@@ -1035,6 +1044,12 @@ button {
   align-items: center;
   gap: 6px;
   margin-top: 8px;
+  flex-wrap: nowrap;
+}
+
+.quantity-controls > button,
+.quantity-value {
+  flex: 0 0 auto;
 }
 
 .quantity-button {
@@ -1065,18 +1080,24 @@ button {
   display: grid;
   width: 32px;
   height: 32px;
-  margin-left: 2px;
+  flex: 0 0 32px;
   padding: 0;
   place-items: center;
-  border: 1px solid var(--border);
+  border: 1px solid #e8c7c2;
   border-radius: 8px;
-  background: var(--surface);
-  color: var(--green-deep);
+  background: #fff7f5;
+  color: #b42318;
+  transition: background-color .16s ease, border-color .16s ease, transform .16s ease;
 }
 
 .remove-button:hover {
-  border-color: var(--green-deep);
-  background: var(--mint);
+  border-color: #d99b93;
+  background: #fce9e6;
+}
+
+.remove-button:active {
+  background: #f6dad6;
+  transform: scale(.96);
 }
 
 .order-bottom {
@@ -1133,7 +1154,7 @@ button {
   min-width: 0;
   border-radius: inherit;
   background: var(--green-primary);
-  transition: width .24s ease;
+  transition: width 300ms ease-in-out;
 }
 
 .promotion-card p {
@@ -1832,18 +1853,17 @@ button {
 
   .order-panel.mobile-cart-open .order-item {
     display: grid;
-    grid-template-columns: 56px minmax(0, 1fr);
-    grid-template-rows: auto auto;
+    grid-template-columns: 52px minmax(0, 1fr) 76px;
     align-items: start;
-    gap: 6px 10px;
+    gap: 10px;
     padding: 12px 0;
   }
 
   .order-panel.mobile-cart-open .order-item-image {
-    width: 56px;
-    height: 56px;
+    width: 52px;
+    height: 52px;
     grid-column: 1;
-    grid-row: 1 / -1;
+    grid-row: 1;
   }
 
   .order-panel.mobile-cart-open .order-item-main {
@@ -1852,9 +1872,12 @@ button {
   }
 
   .order-panel.mobile-cart-open .line-total {
-    grid-column: 2;
-    grid-row: 2;
-    justify-self: end;
+    grid-column: 3;
+    grid-row: 1;
+  }
+
+  .order-panel.mobile-cart-open .quantity-controls {
+    gap: 4px;
   }
 
   .order-panel.mobile-cart-open .order-items.empty {
@@ -1893,11 +1916,6 @@ button {
   }
 
   .order-panel.mobile-cart-open .quantity-button {
-    width: 36px;
-    height: 36px;
-  }
-
-  .order-panel.mobile-cart-open .remove-button {
     width: 36px;
     height: 36px;
   }

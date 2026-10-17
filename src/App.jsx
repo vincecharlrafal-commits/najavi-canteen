@@ -1,10 +1,11 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import "./App.css";
 import { addProductToCart, changeCartQuantity, clearCart, getCartItemCount, getDailyStats, getProductQuantity, localDateKey, removeProductFromCart } from "./domain/order.js";
 import { formatTransactionDateTime, getAverageOrderValue, getRecentTransactions } from "./domain/summary.js";
 import { hasReceiptData, loadTransactions } from "./services/transactionStore.js";
 import { fetchMenu, requestQuote } from "./services/canteenApi.js";
+import { createDebouncedQuoteRequester, getQuotePresentation, getRewardProgress, getVisibleLineTotal } from "./services/quoteLifecycle.js";
 import { completeCheckout } from "./services/checkout.js";
 
 import kaninImage from "./assets/kanin.png";
@@ -40,6 +41,7 @@ function Icon({ name, size = 20 }) {
   if (name === "search") return <svg {...shared}><circle cx="10.8" cy="10.8" r="6.8" /><path d="m16 16 5 5" /></svg>;
   if (name === "cart") return <svg {...shared}><path d="M3 4h2l2.2 11.2a2 2 0 0 0 2 1.6h8.6a2 2 0 0 0 1.9-1.4L22 8H6" /><circle cx="10" cy="20" r="1" /><circle cx="18" cy="20" r="1" /></svg>;
   if (name === "gift") return <svg {...shared}><rect x="3" y="9" width="18" height="12" rx="1" /><path d="M2 6h20v4H2zM12 6v15M12 6H8.5a2.5 2.5 0 1 1 2.5-2.5V6Zm0 0h3.5a2.5 2.5 0 1 0-2.5-2.5V6Z" /></svg>;
+  if (name === "trash") return <svg {...shared}><path d="M3 6h18M19 6v14c0 1.1-.9 2-2 2H7c-1.1 0-2-.9-2-2V6M8 6V4c0-1.1.9-2 2-2h4c1.1 0 2 .9 2 2v2M10 11v6M14 11v6" /></svg>;
   return <svg {...shared}><rect x="3" y="5" width="18" height="14" rx="2" /><path d="M7 10h10M7 14h4" /></svg>;
 }
 
@@ -61,12 +63,11 @@ function App() {
   const [activePage, setActivePage] = useState("Menu");
   const [mobileCartOpen, setMobileCartOpen] = useState(false);
   const [currentDate, setCurrentDate] = useState(() => new Date());
+  const quoteRequester = useMemo(() => createDebouncedQuoteRequester(requestQuote, 200), []);
   const checkoutLock = useRef(false);
   const transactionSubmitted = useRef(false);
   const cartSignature = JSON.stringify(cart.map(({ id, quantity }) => ({ id, quantity })));
-  const currentQuote = quoteState.signature === cartSignature && quoteState.status === "ready" ? quoteState.data : null;
-  const quoteError = quoteState.signature === cartSignature && quoteState.status === "error" ? quoteState.error : null;
-  const quoteLoading = cart.length > 0 && !currentQuote && !quoteError;
+  const { currentQuote, displayQuote, error: quoteError, loading: quoteLoading } = getQuotePresentation(quoteState, cartSignature, cart.length > 0);
   const today = currentDate.toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric", year: "numeric" });
   const todayKey = localDateKey(currentDate);
 
@@ -103,19 +104,27 @@ function App() {
   }, [menuReload]);
 
   useEffect(() => {
-    if (cartSignature === "[]") return undefined;
+    if (cartSignature === "[]") {
+      quoteRequester.cancel();
+      return undefined;
+    }
 
-    const controller = new AbortController();
     const items = JSON.parse(cartSignature);
-    requestQuote(items, { signal: controller.signal })
-      .then((data) => {
-        if (!controller.signal.aborted) setQuoteState({ signature: cartSignature, status: "ready", data, error: null });
-      })
-      .catch((error) => {
-        if (!controller.signal.aborted) setQuoteState({ signature: cartSignature, status: "error", data: null, error: error instanceof Error ? error.message : "The order quote could not be loaded." });
-      });
-    return () => controller.abort();
-  }, [cartSignature, quoteReload]);
+    quoteRequester.schedule(items, {
+      onSuccess: ({ signature, data }) => {
+        setQuoteState((previous) => ({ ...previous, signature, status: "ready", data, error: null }));
+      },
+      onError: ({ signature, error }) => {
+        setQuoteState((previous) => ({
+          ...previous,
+          signature,
+          status: "error",
+          error: error instanceof Error ? error.message : "The order quote could not be loaded.",
+        }));
+      },
+    });
+    return () => quoteRequester.cancel();
+  }, [cartSignature, quoteReload, quoteRequester]);
 
   useEffect(() => {
     if (!mobileCartOpen) return undefined;
@@ -127,48 +136,55 @@ function App() {
     return () => window.removeEventListener("keydown", closeOnEscape);
   }, [mobileCartOpen]);
 
+  const applyCartUpdate = (nextCart) => {
+    const nextSignature = JSON.stringify(nextCart.map(({ id, quantity }) => ({ id, quantity })));
+    setCart(nextCart);
+    setQuoteState((previous) => ({
+      ...previous,
+      signature: nextSignature,
+      status: nextCart.length > 0 ? "loading" : "idle",
+      error: null,
+    }));
+  };
+
   const addToCart = (product) => {
     if (checkoutPending) return;
     transactionSubmitted.current = false;
-    setQuoteState((previous) => ({ ...previous, status: "idle", data: null, error: null }));
-    setCart((currentCart) => addProductToCart(currentCart, product));
+    applyCartUpdate(addProductToCart(cart, product));
     setPaymentStatus(null);
   };
 
   const updateQuantity = (productId, change) => {
     if (checkoutPending) return;
     transactionSubmitted.current = false;
-    setQuoteState((previous) => ({ ...previous, status: "idle", data: null, error: null }));
-    setCart((currentCart) => changeCartQuantity(currentCart, productId, change));
+    applyCartUpdate(changeCartQuantity(cart, productId, change));
     setPaymentStatus(null);
   };
 
   const removeFromCart = (productId) => {
     if (checkoutPending) return;
     transactionSubmitted.current = false;
-    setQuoteState((previous) => ({ ...previous, status: "idle", data: null, error: null }));
-    setCart((currentCart) => removeProductFromCart(currentCart, productId));
+    applyCartUpdate(removeProductFromCart(cart, productId));
     setPaymentStatus(null);
   };
 
   const clearOrder = () => {
     if (checkoutPending) return;
     transactionSubmitted.current = false;
-    setQuoteState((previous) => ({ ...previous, status: "idle", data: null, error: null }));
-    setCart(clearCart());
+    applyCartUpdate(clearCart());
     setCashPayment("");
     setPaymentStatus(null);
   };
 
   const itemCount = getCartItemCount(cart);
-  const subtotal = currentQuote?.subtotal;
-  const discount = currentQuote?.discount;
-  const totalDue = currentQuote?.totalDue;
-  const freeDrinks = currentQuote?.freeDrinks ?? 0;
-  const amountToPromotion = currentQuote ? Math.max(75 - subtotal, 0) : null;
-  const promotionProgress = currentQuote ? Math.min((subtotal / 75) * 100, 100) : 0;
+  const subtotal = displayQuote?.subtotal;
+  const discount = displayQuote?.discount;
+  const totalDue = displayQuote?.totalDue;
+  const displayFreeDrinks = displayQuote?.freeDrinks ?? 0;
+  const amountToPromotion = displayQuote ? Math.max(75 - displayQuote.subtotal, 0) : null;
+  const promotionProgress = getRewardProgress(displayQuote);
   const validPaymentInput = isWholePesoAmount(cashPayment);
-  const isCheckoutEnabled = cart.length > 0 && Boolean(currentQuote) && validPaymentInput && !checkoutPending && !transactionsState.error;
+  const isCheckoutEnabled = cart.length > 0 && Boolean(currentQuote) && !quoteLoading && !quoteError && validPaymentInput && !checkoutPending && !transactionsState.error;
   const todayStats = getDailyStats(transactionsState.transactions, todayKey);
   const averageOrderValue = getAverageOrderValue(transactionsState.transactions);
   const recentTransactions = getRecentTransactions(transactionsState.transactions);
@@ -237,7 +253,7 @@ function App() {
   };
 
   const retryQuote = () => {
-    setQuoteState((previous) => ({ ...previous, status: "idle", data: null, error: null }));
+    setQuoteState((previous) => ({ ...previous, signature: cartSignature, status: "loading", error: null }));
     setQuoteReload((value) => value + 1);
   };
 
@@ -369,7 +385,7 @@ function App() {
       <button className="mobile-cart-bar" type="button" aria-controls="my-order-panel" aria-expanded={mobileCartOpen} onClick={() => setMobileCartOpen(true)}>
         <span className="mobile-cart-label"><Icon name="cart" size={20} />My Order</span>
         <span className="mobile-cart-count">{itemCount} {itemCount === 1 ? "item" : "items"}</span>
-        {itemCount > 0 && <strong className="mobile-cart-total">{currentQuote ? `₱${currentQuote.totalDue.toFixed(2)}` : "…"}</strong>}
+        {itemCount > 0 && <strong className="mobile-cart-total">{displayQuote ? `₱${displayQuote.totalDue.toFixed(2)}` : "…"}</strong>}
       </button>
       {mobileCartOpen && <button className="mobile-cart-backdrop" type="button" aria-label="Close My Order" onClick={() => setMobileCartOpen(false)} />}
 
@@ -385,7 +401,8 @@ function App() {
           {cart.length === 0 ? (
             <div className="empty-order"><div className="empty-cart-icon"><Icon name="cart" size={42} /></div><p>Your order is empty. Add items from the menu.</p></div>
           ) : cart.map((item) => {
-            const quoteLine = currentQuote?.items.find((line) => line.id === item.id);
+            const quoteLine = displayQuote?.items.find((line) => line.id === item.id);
+            const lineTotal = getVisibleLineTotal(quoteLine);
             return (
               <div className="order-item" key={item.id}>
                 <img className="order-item-image" src={item.image} alt="" />
@@ -396,26 +413,26 @@ function App() {
                     <button className="quantity-button" type="button" aria-label={`Decrease ${item.name} quantity`} onClick={() => updateQuantity(item.id, -1)} disabled={checkoutPending}>−</button>
                     <span className="quantity-value">{item.quantity}</span>
                     <button className="quantity-button" type="button" aria-label={`Increase ${item.name} quantity`} onClick={() => updateQuantity(item.id, 1)} disabled={checkoutPending}>+</button>
-                    <button className="remove-button" type="button" onClick={() => removeFromCart(item.id)} disabled={checkoutPending}>Remove</button>
+                    <button className="remove-button" type="button" aria-label="Remove item" title="Remove item" onClick={() => removeFromCart(item.id)} disabled={checkoutPending}><Icon name="trash" size={16} /></button>
                   </div>
                 </div>
-                <strong className="line-total">{quoteLine ? `₱${quoteLine.lineTotal.toFixed(2)}` : quoteError ? "—" : "Updating…"}</strong>
+                <strong className="line-total" aria-hidden={lineTotal === null}>{lineTotal ?? ""}</strong>
               </div>
             );
           })}
         </div>
 
         <div className="order-bottom">
-          <section className={`promotion-card${freeDrinks > 0 ? " promotion-qualified" : ""}`} aria-label="Free-drink promotion">
-            <div className="promotion-heading"><Icon name="gift" size={22} /><strong>{freeDrinks > 0 ? "Free Drink Unlocked!" : "Free Drink Reward"}</strong><span>{freeDrinks > 0 ? "Qualified!" : amountToPromotion === null ? "Quote pending" : `₱${amountToPromotion} to go`}</span></div>
+          <section className={`promotion-card${displayFreeDrinks > 0 ? " promotion-qualified" : ""}`} aria-label="Free-drink promotion">
+            <div className="promotion-heading"><Icon name="gift" size={22} /><strong>{displayFreeDrinks > 0 ? "Free Drink Unlocked!" : "Free Drink Reward"}</strong><span>{displayFreeDrinks > 0 ? "Qualified!" : amountToPromotion === null ? "Add items" : `₱${amountToPromotion} to go`}</span></div>
             <div className="progress-track"><div className="progress-fill" style={{ width: `${promotionProgress}%` }} /></div>
-            <p>{freeDrinks > 0 ? "₱15 deduction applied" : amountToPromotion === null ? "Waiting for the canteen server quote." : `Add ₱${amountToPromotion} more to unlock your free drink.`}</p>
+            <p>{displayFreeDrinks > 0 ? "₱15 deduction applied" : amountToPromotion === null ? "Add items to see reward progress." : `Add ₱${amountToPromotion} more to unlock your free drink.`}</p>
           </section>
 
           <div className="order-totals">
-            <div className="summary-row"><span>Subtotal</span><strong>{currentQuote ? `₱${subtotal.toFixed(2)}` : "—"}</strong></div>
-            <div className="summary-row deduction-row"><span>Free-drink deduction</span><strong>{currentQuote ? `−₱${discount.toFixed(2)}` : "—"}</strong></div>
-            <div className="total-row"><span>Total Due</span><strong>{currentQuote ? `₱${totalDue.toFixed(2)}` : "—"}</strong></div>
+            <div className="summary-row"><span>Subtotal</span><strong>{displayQuote ? `₱${subtotal.toFixed(2)}` : "—"}</strong></div>
+            <div className="summary-row deduction-row"><span>Free-drink deduction</span><strong>{displayQuote ? `−₱${discount.toFixed(2)}` : "—"}</strong></div>
+            <div className="total-row"><span>Total Due</span><strong>{displayQuote ? `₱${totalDue.toFixed(2)}` : "—"}</strong></div>
           </div>
 
           <section className="payment-card">
@@ -424,7 +441,6 @@ function App() {
             </label>
             {cart.length > 0 && !cashPayment.trim() && <p className="payment-hint">Enter whole pesos to enable server checkout.</p>}
             {cashPayment.trim() && !validPaymentInput && <p className="payment-message payment-error" role="status">Enter payment as a non-negative whole number of pesos.</p>}
-            {quoteLoading && <p className="payment-hint" role="status">Updating order totals from the canteen server…</p>}
             {quoteError && <p className="payment-message payment-error" role="alert">{quoteError} <button type="button" onClick={retryQuote}>Retry quote</button></p>}
             {paymentStatus && <p className={`payment-message payment-${paymentStatus.type}`} role="status">{paymentStatus.message}</p>}
             {transactionsState.error && <p className="payment-message payment-error" role="alert">Transaction storage is unavailable. Existing records are protected; checkout is disabled.</p>}
